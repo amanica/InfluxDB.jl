@@ -1,13 +1,12 @@
 __precompile__()
 module InfluxDB
 
-export InfluxServer, create_db, query
+export InfluxServer, create_db, query, query_series
 import Base: write
 
 using JSON
-#using Requests
 using DataFrames
-using Compat
+#using Compat
 using HTTP
 
 # A server that we will be communicating with
@@ -39,7 +38,6 @@ type InfluxServer
         if !isa(password, Nullable)
             password = Nulllable(password)
         end
-        @show uri
         # URIs are the new hotness
         return new(uri, username, password)
     end
@@ -53,6 +51,12 @@ function authenticate!(server::InfluxServer, query::Dict)
     end
 end
 
+function checkResponse(response::HTTP.Response, expectedStatus=200)
+    code = HTTP.status(response)
+    if code != expectedStatus
+        error(HTTP.statustext(r) * ":\n" * HTTP.body(response))
+    end
+end
 
 # Grab a timeseries
 function query_series( server::InfluxServer, db::AbstractString, name::AbstractString;
@@ -60,11 +64,8 @@ function query_series( server::InfluxServer, db::AbstractString, name::AbstractS
     query = Dict("db"=>db, "q"=>"SELECT * from $name")
 
     authenticate!(server, query)
-    @show url="$(server.addr)/query"
-    response = HTTP.get(url; query=query)
-    if response.status != 200
-        error(HTTP.body(response))
-    end
+    response = HTTP.get("$(server.addr)/query"; query=query)
+    checkResponse(response)
 
     # Grab result, turn it into a dataframe
     series_dict = JSON.parse(HTTP.body(response))["results"][1]["series"][1]
@@ -80,10 +81,8 @@ function create_db(server::InfluxServer, db::AbstractString)
     query = Dict("q"=>"CREATE DATABASE \"$db\"")
 
     authenticate!(server, query)
-    response = get("$(server.addr)query"; query=query)
-    if response.status != 200
-        error(String(response.data))
-    end
+    response = HTTP.get("$(server.addr)/query"; query=query)
+    checkResponse(response)
 end
 
 function write( server::InfluxServer, db::AbstractString, name::AbstractString, values::Dict;
@@ -109,10 +108,8 @@ function write( server::InfluxServer, db::AbstractString, name::AbstractString, 
 
     # Authenticate ourselves, if we need to
     authenticate!(server, query)
-    response = post("$(server.addr)write"; query=query, data=datastr)
-    if response.status != 204
-        error(String(response.data))
-    end
+    response = HTTP.post("$(server.addr)/write"; query=query, data=datastr)
+    checkResponse(response, 204)
 end
 
 end # module
