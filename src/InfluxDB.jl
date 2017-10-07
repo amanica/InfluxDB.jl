@@ -1,7 +1,7 @@
 __precompile__()
 module InfluxDB
 
-export InfluxServer, create_db, query, query_series
+export InfluxServer, create_db, query, query_series, rawQuery, showMeasurements
 import Base: write
 
 using JSON
@@ -58,17 +58,28 @@ function checkResponse(response::HTTP.Response, expectedStatus=200)
     end
 end
 
-# Grab a timeseries
-function query_series( server::InfluxServer, db::AbstractString, name::AbstractString;
-                       chunk_size::Integer=10000)
-    query = Dict("db"=>db, "q"=>"SELECT * from $name")
-
+function rawQuery(server::InfluxServer, db::AbstractString, query::Dict)
     authenticate!(server, query)
     response = HTTP.get("$(server.addr)/query"; query=query)
     checkResponse(response)
+    JSON.parse(HTTP.body(response))
+end
 
+function showMeasurements(server::InfluxServer, db::AbstractString)
+    query = Dict("db"=>db, "q"=>"SHOW measurements")
+    results = rawQuery(server, db, query)["results"][1]
+    if length(results) == 0
+        return []
+    end
+    results["series"][1]["values"][1]
+end
+
+# Grab a timeseries
+function query_series(server::InfluxServer, db::AbstractString, name::AbstractString;
+                       chunk_size::Integer=10000)
+    query = Dict("db"=>db, "q"=>"SELECT * from $name")
     # Grab result, turn it into a dataframe
-    series_dict = JSON.parse(HTTP.body(response))["results"][1]["series"][1]
+    series_dict = rawQuery(server, db, query)["results"][1]["series"][1]
     df = DataFrame()
     for name_idx in 1:length(series_dict["columns"])
        df[Symbol(series_dict["columns"][name_idx])] = [x[name_idx] for x in series_dict["values"]]
@@ -76,7 +87,7 @@ function query_series( server::InfluxServer, db::AbstractString, name::AbstractS
     return df
 end
 
-# Create a database!
+# Create a database! (if needed)
 function create_db(server::InfluxServer, db::AbstractString)
     query = Dict("q"=>"CREATE DATABASE \"$db\"")
 
@@ -85,7 +96,7 @@ function create_db(server::InfluxServer, db::AbstractString)
     checkResponse(response)
 end
 
-function write( server::InfluxServer, db::AbstractString, name::AbstractString, values::Dict;
+function write(server::InfluxServer, db::AbstractString, name::AbstractString, values::Dict;
                             tags=Dict{AbstractString,AbstractString}(), timestamp::Float64=time())
     if isempty(values)
         throw(ArgumentError("Must provide at least one value!"))
@@ -108,7 +119,7 @@ function write( server::InfluxServer, db::AbstractString, name::AbstractString, 
 
     # Authenticate ourselves, if we need to
     authenticate!(server, query)
-    response = HTTP.post("$(server.addr)/write"; query=query, data=datastr)
+    response = HTTP.post("$(server.addr)/write"; query=query, body=datastr)
     checkResponse(response, 204)
 end
 
