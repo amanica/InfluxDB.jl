@@ -1,7 +1,7 @@
 __precompile__()
 module InfluxDB
 
-export InfluxServer, create_db, query, query_series, rawQuery, showMeasurements
+export InfluxConnection, create_db, query, query_series, rawQuery, showMeasurements, showFieldKeys
 import Base: write
 
 using JSON
@@ -9,17 +9,20 @@ using DataFrames
 #using Compat
 using HTTP
 
-# A server that we will be communicating with
-type InfluxServer
+# A connection that we will be communicating with
+type InfluxConnection
     # HTTP API endpoints
     addr::HTTP.URI
+    dbName::AbstractString
 
     # Optional authentication stuffage
-    username::Nullable{AbstractString}
-    password::Nullable{AbstractString}
+    username::Union{Void,AbstractString}
+    password::Union{Void,AbstractString}
 
-    # Build a server object that we can use in queries from now on
-    function InfluxServer(address::AbstractString; username=Nullable{AbstractString}(), password=Nullable{AbstractString}())
+    # Build a connection object that we can use in queries from now on
+    function InfluxConnection(address::AbstractString, dbName::AbstractString;
+        username::Union{Void,AbstractString}=nothing,
+        password::Union{Void,AbstractString}=nothing)
         # If there wasn't a schema defined (we only recognize http/https), default to http
         if !ismatch(r"^https?://", address)
             uri = HTTP.URI("http://$address")
@@ -32,23 +35,19 @@ type InfluxServer
             uri =  HTTP.URI(HTTP.scheme(uri), HTTP.host(uri), 8086, HTTP.path(uri))
         end
 
-        if !isa(username, Nullable)
-            username = Nullable(username)
-        end
-        if !isa(password, Nullable)
-            password = Nulllable(password)
-        end
         # URIs are the new hotness
-        return new(uri, username, password)
+        return new(uri, dbName, username, password)
     end
 end
 
-# Add authentication to a query dict, if we need to
-function authenticate!(server::InfluxServer, query::Dict)
-    if !isnull(server.username) && !isnull(server.password)
-        query["u"] = server.username.value
-        query["p"] = server.password.value
+# Returns a Dict that includes the db and authentication if needed
+function buildQuery(connection::InfluxConnection)
+    query = Dict("db"=>connection.dbName)
+    if connection.username != nothing && connection.password != nothing
+        query["u"] = connection.username.value
+        query["p"] = connection.password.value
     end
+    query
 end
 
 function checkResponse(response::HTTP.Response, expectedStatus=200)
@@ -58,28 +57,53 @@ function checkResponse(response::HTTP.Response, expectedStatus=200)
     end
 end
 
-function rawQuery(server::InfluxServer, db::AbstractString, query::Dict)
-    authenticate!(server, query)
-    response = HTTP.get("$(server.addr)/query"; query=query)
+function rawQuery(connection::InfluxConnection, query::Dict)
+    response = HTTP.get("$(connection.addr)/query"; query=query)
     checkResponse(response)
     JSON.parse(HTTP.body(response))
 end
 
-function showMeasurements(server::InfluxServer, db::AbstractString)
-    query = Dict("db"=>db, "q"=>"SHOW measurements")
-    results = rawQuery(server, db, query)["results"][1]
+# Returns a list of the measuresments
+function showMeasurements(connection::InfluxConnection)
+    query = buildQuery(connection)
+    query["q"] = "SHOW measurements"
+    results = rawQuery(connection, query)["results"][1]
     if length(results) == 0
         return []
     end
     results["series"][1]["values"][1]
 end
 
+# Returns a dictionary mesurement=>fieldList
+function showFieldKeys(connection::InfluxConnection;
+        fromMeasurement::Union{Void,AbstractString}=nothing)
+    fromClause=fromMeasurement==nothing?"":" FROM $fromMeasurement"
+    query = buildQuery(connection)
+    query["q"] = "SHOW FIELD KEYS$fromClause"
+    #{"results":[{"series":[
+    #{"name":"cpu","columns":["fieldKey"],"values":[["temp"]]},
+    #{"name":"temperature","columns":["fieldKey"],"values":[["external"],["internal"]]}]}
+    #]}
+    results = rawQuery(connection, query)["results"][1]
+    ret = Dict()
+    if length(results) == 0
+        return ret
+    end
+    for series in results["series"]
+        name = series["name"]
+        values = series["values"][1]
+        ret[name] = values
+    end
+    ret
+end
+
 # Grab a timeseries
-function query_series(server::InfluxServer, db::AbstractString, name::AbstractString;
-                       chunk_size::Integer=10000)
-    query = Dict("db"=>db, "q"=>"SELECT * from $name")
+function query_series(connection::InfluxConnection,
+        name::AbstractString; chunk_size::Integer=10000)
+    query = buildQuery(connection)
+    query["q"] = "SELECT * from $name"
     # Grab result, turn it into a dataframe
-    series_dict = rawQuery(server, db, query)["results"][1]["series"][1]
+    series_dict = rawQuery(connection, query)["results"][1]["series"][1]
     df = DataFrame()
     for name_idx in 1:length(series_dict["columns"])
        df[Symbol(series_dict["columns"][name_idx])] = [x[name_idx] for x in series_dict["values"]]
@@ -88,22 +112,23 @@ function query_series(server::InfluxServer, db::AbstractString, name::AbstractSt
 end
 
 # Create a database! (if needed)
-function create_db(server::InfluxServer, db::AbstractString)
-    query = Dict("q"=>"CREATE DATABASE \"$db\"")
+function create_db(connection::InfluxConnection)
+    query = buildQuery(connection)
+    #maybe need to unset the db..
+    query["q"] = "CREATE DATABASE \"$(connection.dbName)\""
 
-    authenticate!(server, query)
-    response = HTTP.get("$(server.addr)/query"; query=query)
-    checkResponse(response)
+    rawQuery(connection, query)
 end
 
-function write(server::InfluxServer, db::AbstractString, name::AbstractString, values::Dict;
+function write(connection::InfluxConnection, db::AbstractString, name::AbstractString, values::Dict;
                             tags=Dict{AbstractString,AbstractString}(), timestamp::Float64=time())
     if isempty(values)
         throw(ArgumentError("Must provide at least one value!"))
     end
 
     # Start by building our query dict, pointing at a particular database and timestamp precision
-    query = Dict("db"=>db, "precision"=>"s")
+    query = buildQuery(connection)
+    query["precision"]="s"
 
     # Next, string of tags, if we have any
     tagstring = join([",$key=$val" for (key, val) in tags])
@@ -118,8 +143,8 @@ function write(server::InfluxServer, db::AbstractString, name::AbstractString, v
     datastr = "$(name)$(tagstring) $(valuestring) $(timestring)"
 
     # Authenticate ourselves, if we need to
-    authenticate!(server, query)
-    response = HTTP.post("$(server.addr)/write"; query=query, body=datastr)
+    authenticate!(connection, query)
+    response = HTTP.post("$(connection.addr)/write"; query=query, body=datastr)
     checkResponse(response, 204)
 end
 
