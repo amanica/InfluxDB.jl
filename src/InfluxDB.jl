@@ -1,7 +1,7 @@
 __precompile__()
 module InfluxDB
 
-export InfluxConnection, create_db, query, query_series, rawQuery, showMeasurements, showFieldKeys
+export InfluxConnection, create_db, query, query_series, rawQuery, showMeasurements, showFieldKeys, count, write
 import Base: write
 
 using JSON
@@ -53,7 +53,8 @@ end
 function checkResponse(response::HTTP.Response, expectedStatus=200)
     code = HTTP.status(response)
     if code != expectedStatus
-        error(HTTP.statustext(r) * ":\n" * HTTP.body(response))
+        @show response
+        error(HTTP.statustext(response) * ":\n" * HTTP.body(response))
     end
 end
 
@@ -77,13 +78,9 @@ end
 # Returns a dictionary mesurement=>fieldList
 function showFieldKeys(connection::InfluxConnection;
         fromMeasurement::Union{Void,AbstractString}=nothing)
-    fromClause=fromMeasurement==nothing?"":" FROM $fromMeasurement"
+    fromClause=fromMeasurement==nothing?"":" FROM \"$fromMeasurement\""
     query = buildQuery(connection)
     query["q"] = "SHOW FIELD KEYS$fromClause"
-    #{"results":[{"series":[
-    #{"name":"cpu","columns":["fieldKey"],"values":[["temp"]]},
-    #{"name":"temperature","columns":["fieldKey"],"values":[["external"],["internal"]]}]}
-    #]}
     results = rawQuery(connection, query)["results"][1]
     ret = Dict()
     if length(results) == 0
@@ -97,16 +94,31 @@ function showFieldKeys(connection::InfluxConnection;
     ret
 end
 
+# Count the number of values for a measurment field
+function count(connection::InfluxConnection,
+        measurement::AbstractString, fieldKey::AbstractString)
+    query = buildQuery(connection)
+    @show query["q"] = "SELECT count(\"$fieldKey\") FROM \"$measurement\""
+    # {"results":[{"series":[{"name":"cpu","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2]]}]}]}
+    results = rawQuery(connection, query)["results"][1]
+    if length(results) == 0
+        return 0
+    end
+    series_dict = results["series"][1]
+    series_dict["values"][1][2]
+end
+
 # Grab a timeseries
 function query_series(connection::InfluxConnection,
-        name::AbstractString; chunk_size::Integer=10000)
+        measurement::AbstractString; chunk_size::Integer=10000)
     query = buildQuery(connection)
-    query["q"] = "SELECT * from $name"
+    query["q"] = "SELECT * FROM \"$measurement\""
     # Grab result, turn it into a dataframe
     series_dict = rawQuery(connection, query)["results"][1]["series"][1]
     df = DataFrame()
-    for name_idx in 1:length(series_dict["columns"])
-       df[Symbol(series_dict["columns"][name_idx])] = [x[name_idx] for x in series_dict["values"]]
+    #XXX: could use enumerate to save a lookup..
+    for measurement_idx in 1:length(series_dict["columns"])
+       df[Symbol(series_dict["columns"][measurement_idx])] = [x[measurement_idx] for x in series_dict["values"]]
     end
     return df
 end
@@ -116,11 +128,10 @@ function create_db(connection::InfluxConnection)
     query = buildQuery(connection)
     #maybe need to unset the db..
     query["q"] = "CREATE DATABASE \"$(connection.dbName)\""
-
     rawQuery(connection, query)
 end
 
-function write(connection::InfluxConnection, db::AbstractString, name::AbstractString, values::Dict;
+function write(connection::InfluxConnection, measurement::AbstractString, values::Dict;
                             tags=Dict{AbstractString,AbstractString}(), timestamp::Float64=time())
     if isempty(values)
         throw(ArgumentError("Must provide at least one value!"))
@@ -140,10 +151,9 @@ function write(connection::InfluxConnection, db::AbstractString, name::AbstractS
     timestring = "$(round(Int64,timestamp))"
 
     # Put them all together to get a data string
-    datastr = "$(name)$(tagstring) $(valuestring) $(timestring)"
+    datastr = "$(measurement)$(tagstring) $(valuestring) $(timestring)"
 
     # Authenticate ourselves, if we need to
-    authenticate!(connection, query)
     response = HTTP.post("$(connection.addr)/write"; query=query, body=datastr)
     checkResponse(response, 204)
 end
