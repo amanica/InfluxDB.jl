@@ -1,15 +1,18 @@
 __precompile__()
 module InfluxDB
 
-export InfluxConnection, create_db, query, query_series, rawQuery, showMeasurements, showFieldKeys, count, write
+export InfluxConnection, create_db, query, query_series,
+    rawQuery, showMeasurements, showFieldKeys, count, write,
+    queryAsTimeArray, dropMeasurement
 import Base: write
 
 using JSON
 using DataFrames
-#using Compat
+using TimeSeries
 using HTTP
 
 # A connection that we will be communicating with
+# TODO: add a debug flag / show queries flag
 type InfluxConnection
     # HTTP API endpoints
     addr::HTTP.URI
@@ -75,6 +78,14 @@ function showMeasurements(connection::InfluxConnection)
     results["series"][1]["values"][1]
 end
 
+function dropMeasurement(connection::InfluxConnection,
+        measurement::AbstractString)
+    query = buildQuery(connection)
+    query["q"] = "DROP MEASUREMENT \"$measurement\""
+    rawQuery(connection, query)
+end
+
+
 # Returns a dictionary mesurement=>fieldList
 function showFieldKeys(connection::InfluxConnection;
         fromMeasurement::Union{Void,AbstractString}=nothing)
@@ -108,7 +119,36 @@ function count(connection::InfluxConnection,
     series_dict["values"][1][2]
 end
 
-# Grab a timeseries
+#=
+{"results":[{"series":[{"name":"cpu","columns":["time","temp"],
+"values":[["2017-10-03T22:00:58Z",35],["2017-10-03T22:02:20Z",35]]}]}]}
+
+{"results":[{"series":[{"name":"temperature",
+"columns":["time","external","internal","machine","type"],
+"values":[["2017-10-07T22:08:27.097028615Z",25,37,"unit42","assembly"]]}]}]}
+=#
+# TODO: support specifying a date range
+function queryAsTimeArray(connection::InfluxConnection,
+        measurement::AbstractString; chunk_size::Integer=10000)
+    query = buildQuery(connection)
+    query["q"] = "SELECT * FROM \"$measurement\""
+    # Grab result, turn it into a TimeArray
+    series_dict = rawQuery(connection, query)["results"][1]["series"][1]
+    columnCount=length(series_dict["columns"])
+    valueCount=length(series_dict["values"])
+    # TODO: support other date and value types
+    dates=Vector{DateTime}(valueCount)
+    values=Matrix{Float64}(valueCount,columnCount-1)
+    for (i, row) in enumerate(series_dict["values"])
+        # TODO: support millisecond precision eg. "2017-10-07T22:08:27.097028615Z"
+        dates[i] = parse(DateTime, row[1],  @dateformat_str "yyyy-mm-dd\\THH:MM:SSZ")
+        values[i,:] = Vector{Float64}(row[2:end])
+    end
+    TimeArray(dates, values, Vector{String}(series_dict["columns"][2:end]))
+end
+
+# Grab a timeseries as a dataframe
+# deprecated, is a timeseries not better than a dataframe for timeseries data?
 function query_series(connection::InfluxConnection,
         measurement::AbstractString; chunk_size::Integer=10000)
     query = buildQuery(connection)
@@ -116,9 +156,8 @@ function query_series(connection::InfluxConnection,
     # Grab result, turn it into a dataframe
     series_dict = rawQuery(connection, query)["results"][1]["series"][1]
     df = DataFrame()
-    #XXX: could use enumerate to save a lookup..
-    for measurement_idx in 1:length(series_dict["columns"])
-       df[Symbol(series_dict["columns"][measurement_idx])] = [x[measurement_idx] for x in series_dict["values"]]
+    for (measurement_idx, column) in enumerate(series_dict["columns"])
+       df[Symbol(column[measurement_idx])] = [x[measurement_idx] for x in series_dict["values"]]
     end
     return df
 end
