@@ -23,17 +23,6 @@ function testHidePassword()
     true
 end
 
-function waitForData(connection::InfluxDB.InfluxConnection)
-    count = nothing
-    for i in 1:1
-        count = InfluxDB.count(connection, measurement, field)
-        count != 0 && return count
-        println("data not written yet, sleep a while")
-        sleep(1)
-    end
-    count
-end
-
 function testWrite(connection::InfluxDB.InfluxConnection)
     # given
     InfluxDB.dropMeasurement(connection, measurement)
@@ -43,7 +32,7 @@ function testWrite(connection::InfluxDB.InfluxConnection)
     InfluxDB.write(connection, measurement, Dict(field=>35))
 
     # then
-    @test waitForData(connection) == 1
+    @test InfluxDB.count(connection, measurement, field) == 1
 
     timeseries = InfluxDB.queryAsTimeArray(connection, measurement)
     println(timeseries)
@@ -59,5 +48,4 @@ end
 
     @test testHidePassword();
     @test testWrite(connection)
-
 end

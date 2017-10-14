@@ -44,49 +44,6 @@ type InfluxConnection
     end
 end
 
-# Returns a Dict that includes the db and authentication if needed
-function buildQuery(connection::InfluxConnection)
-    query = Dict("db"=>connection.dbName)
-    if connection.username != nothing && connection.password != nothing
-        query["u"] = connection.username
-        query["p"] = connection.password
-    end
-    query
-end
-
-function checkResponse(response::HTTP.Response, expectedStatus=200)
-    code = HTTP.status(response)
-    if code != expectedStatus
-        #@show response
-        error("$(HTTP.statustext(response)):\n$response")
-    end
-end
-
-function rawQuery(connection::InfluxConnection, query::Dict, method::Function=HTTP.get)
-    printQuery(connection, query, "query")
-    response = method("$(connection.addr)/query"; query=query)
-    checkResponse(response)
-    JSON.parse(HTTP.body(response))
-end
-
-function rawPrintQuery(connection::InfluxConnection, query::Dict,
-    path::AbstractString, io::IO=STDOUT)
-    queryStr=join(["$k=$v" for (k,v) in query],"&")
-    println(io, "$(connection.addr)/$path?$queryStr")
-end
-function printQuery(connection::InfluxConnection, query::Dict,
-        path::AbstractString, io::IO=STDOUT)
-    if connection.printQueries
-        if haskey(query, "p")
-            queryWithoutPassword=copy(query)
-            queryWithoutPassword["p"]="*****"
-            rawPrintQuery(connection, queryWithoutPassword, path, io)
-        else
-            rawPrintQuery(connection, query, path, io)
-        end
-    end
-end
-
 # Returns a list of the measuresments
 function showMeasurements(connection::InfluxConnection)
     query = buildQuery(connection)
@@ -98,6 +55,8 @@ function showMeasurements(connection::InfluxConnection)
     results["series"][1]["values"][1]
 end
 
+# This does not seem to work in in newer versions of InfluxDB
+# and I don't know why..
 function dropMeasurement(connection::InfluxConnection,
         measurement::AbstractString)
     query = buildQuery(connection)
@@ -223,5 +182,50 @@ function write(connection::InfluxConnection, measurement::AbstractString, values
     #rawQuery(connection, query, path="write" method=HTTP.post, body=datastr)
     checkResponse(response, 204)
 end
+
+
+# Returns a Dict that includes the db and authentication if needed
+function buildQuery(connection::InfluxConnection)
+    query = Dict("db"=>connection.dbName)
+    if connection.username != nothing && connection.password != nothing
+        query["u"] = connection.username
+        query["p"] = connection.password
+    end
+    query
+end
+
+function checkResponse(response::HTTP.Response, expectedStatus=200)
+    code = HTTP.status(response)
+    if code != expectedStatus
+        #@show response
+        error("$(HTTP.statustext(response)):\n$response")
+    end
+end
+
+function rawQuery(connection::InfluxConnection, query::Dict, method::Function=HTTP.get)
+    printQuery(connection, query, "query")
+    response = method("$(connection.addr)/query"; query=query)
+    checkResponse(response)
+    JSON.parse(HTTP.body(response))
+end
+
+function rawPrintQuery(connection::InfluxConnection, query::Dict,
+    path::AbstractString, io::IO=STDOUT)
+    queryStr=join(["$k=$v" for (k,v) in query],"&")
+    println(io, "$(connection.addr)/$path?$queryStr")
+end
+function printQuery(connection::InfluxConnection, query::Dict,
+        path::AbstractString, io::IO=STDOUT)
+    if connection.printQueries
+        if haskey(query, "p")
+            queryWithoutPassword=copy(query)
+            queryWithoutPassword["p"]="*****"
+            rawPrintQuery(connection, queryWithoutPassword, path, io)
+        else
+            rawPrintQuery(connection, query, path, io)
+        end
+    end
+end
+
 
 end # module
