@@ -12,7 +12,6 @@ using TimeSeries
 using HTTP
 
 # A connection that we will be communicating with
-# TODO: add a debug flag / show queries flag
 type InfluxConnection
     # HTTP API endpoints
     addr::HTTP.URI
@@ -22,10 +21,13 @@ type InfluxConnection
     username::Union{Void,AbstractString}
     password::Union{Void,AbstractString}
 
+    printQueries::Bool
+
     # Build a connection object that we can use in queries from now on
     function InfluxConnection(address::AbstractString, dbName::AbstractString;
         username::Union{Void,AbstractString}=nothing,
-        password::Union{Void,AbstractString}=nothing)
+        password::Union{Void,AbstractString}=nothing,
+        printQueries::Bool=false)
         # If there wasn't a schema defined (we only recognize http/https), default to http
         if !ismatch(r"^https?://", address)
             uri = HTTP.URI("http://$address")
@@ -38,8 +40,7 @@ type InfluxConnection
             uri =  HTTP.URI(HTTP.scheme(uri), HTTP.host(uri), 8086, HTTP.path(uri))
         end
 
-        # URIs are the new hotness
-        return new(uri, dbName, username, password)
+        return new(uri, dbName, username, password, printQueries)
     end
 end
 
@@ -47,8 +48,8 @@ end
 function buildQuery(connection::InfluxConnection)
     query = Dict("db"=>connection.dbName)
     if connection.username != nothing && connection.password != nothing
-        query["u"] = connection.username.value
-        query["p"] = connection.password.value
+        query["u"] = connection.username
+        query["p"] = connection.password
     end
     query
 end
@@ -56,22 +57,41 @@ end
 function checkResponse(response::HTTP.Response, expectedStatus=200)
     code = HTTP.status(response)
     if code != expectedStatus
-        @show response
-        error(HTTP.statustext(response) * ":\n" * HTTP.body(response))
+        #@show response
+        error("$(HTTP.statustext(response)):\n$response")
     end
 end
 
-function rawQuery(connection::InfluxConnection, query::Dict)
-    response = HTTP.get("$(connection.addr)/query"; query=query)
+function rawQuery(connection::InfluxConnection, query::Dict, method::Function=HTTP.get)
+    printQuery(connection, query, "query")
+    response = method("$(connection.addr)/query"; query=query)
     checkResponse(response)
     JSON.parse(HTTP.body(response))
+end
+
+function rawPrintQuery(connection::InfluxConnection, query::Dict,
+    path::AbstractString, io::IO=STDOUT)
+    queryStr=join(["$k=$v" for (k,v) in query],"&")
+    println(io, "$(connection.addr)/$path?$queryStr")
+end
+function printQuery(connection::InfluxConnection, query::Dict,
+        path::AbstractString, io::IO=STDOUT)
+    if connection.printQueries
+        if haskey(query, "p")
+            queryWithoutPassword=copy(query)
+            queryWithoutPassword["p"]="*****"
+            rawPrintQuery(connection, queryWithoutPassword, path, io)
+        else
+            rawPrintQuery(connection, query, path, io)
+        end
+    end
 end
 
 # Returns a list of the measuresments
 function showMeasurements(connection::InfluxConnection)
     query = buildQuery(connection)
     query["q"] = "SHOW measurements"
-    results = rawQuery(connection, query)["results"][1]
+    results = rawQuery(connection, query, HTTP.post)["results"][1]
     if length(results) == 0
         return []
     end
@@ -82,7 +102,7 @@ function dropMeasurement(connection::InfluxConnection,
         measurement::AbstractString)
     query = buildQuery(connection)
     query["q"] = "DROP MEASUREMENT \"$measurement\""
-    rawQuery(connection, query)
+    rawQuery(connection, query, HTTP.post)
 end
 
 
@@ -109,16 +129,18 @@ end
 function count(connection::InfluxConnection,
         measurement::AbstractString, fieldKey::AbstractString)
     query = buildQuery(connection)
-    @show query["q"] = "SELECT count(\"$fieldKey\") FROM \"$measurement\""
+    query["q"] = "SELECT count(\"$fieldKey\") FROM \"$measurement\""
     # {"results":[{"series":[{"name":"cpu","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2]]}]}]}
     results = rawQuery(connection, query)["results"][1]
-    if length(results) == 0
+    if !haskey(results, "series")
+        @show results
         return 0
     end
     series_dict = results["series"][1]
     series_dict["values"][1][2]
 end
 
+# Returns nothing if no data is available
 #=
 {"results":[{"series":[{"name":"cpu","columns":["time","temp"],
 "values":[["2017-10-03T22:00:58Z",35],["2017-10-03T22:02:20Z",35]]}]}]}
@@ -133,7 +155,9 @@ function queryAsTimeArray(connection::InfluxConnection,
     query = buildQuery(connection)
     query["q"] = "SELECT * FROM \"$measurement\""
     # Grab result, turn it into a TimeArray
-    series_dict = rawQuery(connection, query)["results"][1]["series"][1]
+    results = rawQuery(connection, query)["results"][1]
+    length(results) != 0 || return TimeArray(Vector{DateTime}(), Array{Float64}(0))
+    series_dict = results["series"][1]
     columnCount=length(series_dict["columns"])
     valueCount=length(series_dict["values"])
     # TODO: support other date and value types
@@ -167,7 +191,8 @@ function create_db(connection::InfluxConnection)
     query = buildQuery(connection)
     #maybe need to unset the db..
     query["q"] = "CREATE DATABASE \"$(connection.dbName)\""
-    rawQuery(connection, query)
+    delete!(query,"db")
+    rawQuery(connection, query, HTTP.post)
 end
 
 function write(connection::InfluxConnection, measurement::AbstractString, values::Dict;
@@ -178,6 +203,7 @@ function write(connection::InfluxConnection, measurement::AbstractString, values
 
     # Start by building our query dict, pointing at a particular database and timestamp precision
     query = buildQuery(connection)
+    #TODO: maybe give the connection a default and even allow methods to override it in buildQuery
     query["precision"]="s"
 
     # Next, string of tags, if we have any
@@ -192,8 +218,9 @@ function write(connection::InfluxConnection, measurement::AbstractString, values
     # Put them all together to get a data string
     datastr = "$(measurement)$(tagstring) $(valuestring) $(timestring)"
 
-    # Authenticate ourselves, if we need to
+    printQuery(connection, query, "write")
     response = HTTP.post("$(connection.addr)/write"; query=query, body=datastr)
+    #rawQuery(connection, query, path="write" method=HTTP.post, body=datastr)
     checkResponse(response, 204)
 end
 
