@@ -33,8 +33,22 @@ function testWrite(connection::InfluxDB.InfluxConnection)
 
     # then
     @test InfluxDB.count(connection, measurement, field) == 1
+    @test contains(==, InfluxDB.showFieldKeys(connection;
+        fromMeasurement=measurement)[measurement],field)
 
+    true
+end
+
+function testReadTimeSeries(connection::InfluxDB.InfluxConnection)
+    # given
+    InfluxDB.dropMeasurement(connection, measurement)
+    InfluxDB.write(connection, measurement, Dict(field=>35))
+    @test InfluxDB.count(connection, measurement, field) == 1
+
+    # when
     timeseries = InfluxDB.queryAsTimeArray(connection, measurement)
+
+    # then
     println(timeseries)
     @test length(timeseries) == 1
     # TODO: check value
@@ -56,6 +70,7 @@ end
         printQueries=true)
     InfluxDB.create_db(connection)
 
-    @test testHidePassword();
+    @test testHidePassword()
     @test testWrite(connection)
+    @test testReadTimeSeries(connection)
 end

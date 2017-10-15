@@ -269,7 +269,7 @@ function hasSeries(responseJson)
         @show responseJson
         return false
     end
-    responseJson["results"][1]
+    results = responseJson["results"][1]
     if !haskey(results, "series")
         @show results
         return false
