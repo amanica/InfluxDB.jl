@@ -71,12 +71,12 @@ function showFieldKeys(connection::InfluxConnection;
     fromClause=fromMeasurement==nothing?"":" FROM \"$fromMeasurement\""
     query = buildQuery(connection)
     query["q"] = "SHOW FIELD KEYS$fromClause"
-    results = rawQuery(connection, query)["results"][1]
+    responseJson = rawQuery(connection, query)
     ret = Dict()
-    if length(results) == 0
+    if !hasSeries(responseJson)
         return ret
     end
-    for series in results["series"]
+    for series in responseJson["results"][1]["series"]
         name = series["name"]
         values = series["values"][1]
         ret[name] = values
@@ -262,6 +262,26 @@ end
 function toInfluxDate(dateTime::DateTime)
     #Dates.format((dateTime, @dateformat_str "yyyy-mm-dd\\THH:MM:SSZ")
     "$(round(Int64,Dates.datetime2unix(dateTime)))000000000"
+end
+
+function hasSeries(responseJson)
+    if !haskey(responseJson, "results")
+        @show responseJson
+        return false
+    end
+    responseJson["results"][1]
+    if !haskey(results, "series")
+        @show results
+        return false
+    end
+    true
+end
+
+function getSeries(responseJson, default=nothing)
+    if !hasSeries(responseJson)
+        return default
+    end
+    series_dict = responseJson["results"][1]["series"][1]
 end
 
 end # module
