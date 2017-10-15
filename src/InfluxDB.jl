@@ -107,15 +107,46 @@ end
 {"results":[{"series":[{"name":"temperature",
 "columns":["time","external","internal","machine","type"],
 "values":[["2017-10-07T22:08:27.097028615Z",25,37,"unit42","assembly"]]}]}]}
+
+> SELECT * FROM "cpu" WHERE time >= 1483228800 AND time <= 1512172800
+> SELECT * FROM "cpu"
+name: cpu
+---------
+time			temp
+1483228800
+1485907200000000000	36
+1508027843000000000	35
+
 =#
+# If a range is not specified, ALL data is returned
 # TODO: support specifying a date range
 function queryAsTimeArray(connection::InfluxConnection,
-        measurement::AbstractString; chunk_size::Integer=10000)
+        measurement::AbstractString;
+        from::Union{Void,DateTime}=nothing, to::Union{Void,DateTime}=nothing
+        #chunk_size::Integer=10000
+        )
     query = buildQuery(connection)
-    query["q"] = "SELECT * FROM \"$measurement\""
+
+    whereClauseItems = []
+    if from != nothing
+        push!(whereClauseItems, "time >= $(toInfluxDate(from))")
+    end
+    if to != nothing
+        push!(whereClauseItems, "time <= $(toInfluxDate(to))")
+    end
+    whereClause = ""
+    if length(whereClauseItems) > 0
+        @show whereClauseItems
+        whereClause = """WHERE $(join(whereClauseItems," AND "))"""
+    end
+    query["q"] = "SELECT * FROM \"$measurement\" $whereClause"
+
     # Grab result, turn it into a TimeArray
     results = rawQuery(connection, query)["results"][1]
-    length(results) != 0 || return TimeArray(Vector{DateTime}(), Array{Float64}(0))
+    if !haskey(results, "series")
+        @show results
+        return TimeArray(Vector{DateTime}(), Array{Float64}(0))
+    end
     series_dict = results["series"][1]
     columnCount=length(series_dict["columns"])
     valueCount=length(series_dict["values"])
@@ -214,6 +245,7 @@ function rawPrintQuery(connection::InfluxConnection, query::Dict,
     queryStr=join(["$k=$v" for (k,v) in query],"&")
     println(io, "$(connection.addr)/$path?$queryStr")
 end
+
 function printQuery(connection::InfluxConnection, query::Dict,
         path::AbstractString, io::IO=STDOUT)
     if connection.printQueries
@@ -227,5 +259,9 @@ function printQuery(connection::InfluxConnection, query::Dict,
     end
 end
 
+function toInfluxDate(dateTime::DateTime)
+    #Dates.format((dateTime, @dateformat_str "yyyy-mm-dd\\THH:MM:SSZ")
+    "$(round(Int64,Dates.datetime2unix(dateTime)))000000000"
+end
 
 end # module

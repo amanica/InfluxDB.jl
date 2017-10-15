@@ -38,6 +38,16 @@ function testWrite(connection::InfluxDB.InfluxConnection)
     println(timeseries)
     @test length(timeseries) == 1
     # TODO: check value
+
+    InfluxDB.write(connection, measurement, Dict(field=>36),
+        timestamp=Dates.datetime2unix(DateTime(2017, 2, 1, 0, 0))
+    )
+
+    timeseries = InfluxDB.queryAsTimeArray(connection, measurement,
+        from=DateTime(2017, 1, 1, 0, 0), to=DateTime(2017, 2, 2, 0, 0))
+    println(timeseries)
+    @test length(timeseries) == 1
+
     true
 end
 
