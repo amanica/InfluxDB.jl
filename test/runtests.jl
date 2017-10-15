@@ -33,8 +33,8 @@ function testWrite(connection::InfluxDB.InfluxConnection)
 
     # then
     @test InfluxDB.count(connection, measurement, field) == 1
-    @test contains(==, InfluxDB.showFieldKeys(connection;
-        fromMeasurement=measurement)[measurement],field)
+    @test InfluxDB.showFieldKeys(connection;
+        fromMeasurement=measurement)[measurement] == [field]
 
     true
 end

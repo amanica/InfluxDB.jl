@@ -78,7 +78,7 @@ function showFieldKeys(connection::InfluxConnection;
     end
     for series in responseJson["results"][1]["series"]
         name = series["name"]
-        values = series["values"][1]
+        values = [v[1] for v in series["values"]]
         ret[name] = values
     end
     ret
