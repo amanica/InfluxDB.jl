@@ -1,6 +1,8 @@
 include("../src/InfluxDB.jl")
 using InfluxDB
 using Base.Test
+using Base.Dates
+using TimeSeries
 
 measurement="cpu"
 field="temp"
@@ -65,6 +67,20 @@ function testReadTimeSeries(connection::InfluxDB.InfluxConnection)
     true
 end
 
+function testWriteTimeArray(connection::InfluxDB.InfluxConnection)
+    period=Second(5)
+    from=DateTime(2017, 1, 1, 0, 0)
+    to=DateTime(2017, 1, 1, 0, 1)
+    dates=collect(from:period:to)
+    colNames=["a.a", "b.b"]
+    data=rand(length(dates), length(colNames))
+    data[:,2].*=10
+    timearray = TimeArray(dates, data, colNames)
+
+    true
+end
+
+
 @testset "Influxdb tests" begin
     connection = InfluxDB.InfluxConnection("http://localhost:8086", "julia-test",
         printQueries=true)
@@ -73,4 +89,5 @@ end
     @test testHidePassword()
     @test testWrite(connection)
     @test testReadTimeSeries(connection)
+    @test testWriteTimeArray(connection)
 end

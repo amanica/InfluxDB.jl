@@ -49,7 +49,7 @@ function showMeasurements(connection::InfluxConnection)
     query = buildQuery(connection)
     query["q"] = "SHOW measurements"
     results = rawQuery(connection, query, HTTP.post)["results"][1]
-    if length(results) == 0
+    if isempty(results)
         return []
     end
     results["series"][1]["values"][1]
@@ -99,27 +99,12 @@ function count(connection::InfluxConnection,
     series_dict["values"][1][2]
 end
 
-# Returns nothing if no data is available
 #=
-{"results":[{"series":[{"name":"cpu","columns":["time","temp"],
-"values":[["2017-10-03T22:00:58Z",35],["2017-10-03T22:02:20Z",35]]}]}]}
-
 {"results":[{"series":[{"name":"temperature",
 "columns":["time","external","internal","machine","type"],
 "values":[["2017-10-07T22:08:27.097028615Z",25,37,"unit42","assembly"]]}]}]}
-
-> SELECT * FROM "cpu" WHERE time >= 1483228800 AND time <= 1512172800
-> SELECT * FROM "cpu"
-name: cpu
----------
-time			temp
-1483228800
-1485907200000000000	36
-1508027843000000000	35
-
 =#
 # If a range is not specified, ALL data is returned
-# TODO: support specifying a date range
 function queryAsTimeArray(connection::InfluxConnection,
         measurement::AbstractString;
         from::Union{Void,DateTime}=nothing, to::Union{Void,DateTime}=nothing
@@ -183,6 +168,34 @@ function create_db(connection::InfluxConnection)
     query["q"] = "CREATE DATABASE \"$(connection.dbName)\""
     delete!(query,"db")
     rawQuery(connection, query, HTTP.post)
+end
+
+function write(connection::InfluxConnection, values::TimeArray)
+    if isempty(values)
+        return
+    end
+
+    # Start by building our query dict, pointing at a particular database and timestamp precision
+    query = buildQuery(connection)
+    #TODO: maybe give the connection a default and even allow methods to override it in buildQuery
+    query["precision"]="s"
+
+    # Next, string of tags, if we have any
+    tagstring = join([",$key=$val" for (key, val) in tags])
+
+    # Next, our values
+    valuestring = join(["$key=$val" for (key, val) in values], ",")
+
+    # Finally, convert timestamp to seconds
+    timestring = "$(round(Int64,timestamp))"
+
+    # Put them all together to get a data string
+    datastr = "$(measurement)$(tagstring) $(valuestring) $(timestring)"
+
+    printQuery(connection, query, "write")
+    response = HTTP.post("$(connection.addr)/write"; query=query, body=datastr)
+    #rawQuery(connection, query, path="write" method=HTTP.post, body=datastr)
+    checkResponse(response, 204)
 end
 
 function write(connection::InfluxConnection, measurement::AbstractString, values::Dict;

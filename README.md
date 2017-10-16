@@ -7,5 +7,5 @@ A package that makes talking to an InfluxDB server a walk in the veritable park.
 
 ## TODO
 
-* Keep the tcp connection open
+* Keep the tcp connection open (and recover if it dies if needed)
 * Make function names consistent (what is the julia standard?!)
