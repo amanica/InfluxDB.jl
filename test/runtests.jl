@@ -95,8 +95,8 @@ end
         printQueries=true)
     InfluxDB.create_db(connection)
 
-    # @test testHidePassword()
-    # @test testWrite(connection)
+    @test testHidePassword()
+    @test testWrite(connection)
     @test testReadTimeSeries(connection)
     @test testWriteTimeArray(connection)
 end
