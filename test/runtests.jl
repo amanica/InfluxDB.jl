@@ -68,6 +68,7 @@ function testReadTimeSeries(connection::InfluxDB.InfluxConnection)
 end
 
 function testWriteTimeArray(connection::InfluxDB.InfluxConnection)
+    InfluxDB.dropMeasurement(connection, measurement)
     period=Second(5)
     from=DateTime(2017, 1, 1, 0, 0)
     to=DateTime(2017, 1, 1, 0, 1)
@@ -75,7 +76,15 @@ function testWriteTimeArray(connection::InfluxDB.InfluxConnection)
     colNames=["a.a", "b.b"]
     data=rand(length(dates), length(colNames))
     data[:,2].*=10
-    timearray = TimeArray(dates, data, colNames)
+    @show timearray = TimeArray(dates, data, colNames)
+
+    InfluxDB.write(connection, measurement, timearray)
+
+    readTimeseries = InfluxDB.queryAsTimeArray(connection, measurement,
+        from=DateTime(2017, 1, 1, 0, 0), to=DateTime(2017, 2, 2, 0, 0)
+    )
+    println(readTimeseries)
+    @test length(readTimeseries) == length(timearray)
 
     true
 end
@@ -86,8 +95,8 @@ end
         printQueries=true)
     InfluxDB.create_db(connection)
 
-    @test testHidePassword()
-    @test testWrite(connection)
+    # @test testHidePassword()
+    # @test testWrite(connection)
     @test testReadTimeSeries(connection)
     @test testWriteTimeArray(connection)
 end

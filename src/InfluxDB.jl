@@ -141,6 +141,7 @@ function queryAsTimeArray(connection::InfluxConnection,
     for (i, row) in enumerate(series_dict["values"])
         # TODO: support millisecond precision eg. "2017-10-07T22:08:27.097028615Z"
         dates[i] = parse(DateTime, row[1],  @dateformat_str "yyyy-mm-dd\\THH:MM:SSZ")
+        #@show row
         values[i,:] = Vector{Float64}(row[2:end])
     end
     TimeArray(dates, values, Vector{String}(series_dict["columns"][2:end]))
@@ -170,28 +171,42 @@ function create_db(connection::InfluxConnection)
     rawQuery(connection, query, HTTP.post)
 end
 
-function write(connection::InfluxConnection, values::TimeArray)
-    if isempty(values)
+function write(connection::InfluxConnection,  measurement::AbstractString,
+        timearray::TimeArray)
+    if isempty(timearray)
         return
     end
+    colnames = timearray.colnames
 
     # Start by building our query dict, pointing at a particular database and timestamp precision
     query = buildQuery(connection)
     #TODO: maybe give the connection a default and even allow methods to override it in buildQuery
     query["precision"]="s"
 
-    # Next, string of tags, if we have any
-    tagstring = join([",$key=$val" for (key, val) in tags])
+    dataLines=[]
 
-    # Next, our values
-    valuestring = join(["$key=$val" for (key, val) in values], ",")
+    for i in 1:length(timearray)
 
-    # Finally, convert timestamp to seconds
-    timestring = "$(round(Int64,timestamp))"
+        # Next, string of tags, if we have any
+        tagstring=""
+        #tagstring = join([",$key=$val" for (key, val) in tags])
+        line = timearray[i]
 
-    # Put them all together to get a data string
-    datastr = "$(measurement)$(tagstring) $(valuestring) $(timestring)"
+        # Next, our values
+        valuestring = join(["$colname=$(line.values[c])"
+            for (c, colname) in enumerate(colnames)], ",")
 
+        # Finally, convert timestamp to seconds
+        timestamp=Dates.datetime2unix(line.timestamp[1])
+        timestring = "$(round(Int64,timestamp))"
+
+        # Put them all together to get a data string
+        push!(dataLines, "$(measurement)$(tagstring) $(valuestring) $(timestring)")
+    end
+    datastr = join(dataLines, "\n")
+    #println(datastr)
+    #"cpu" "a.a"=0.5194279418894208,"b.b"=3.907715037511672 1483228800
+    #cpu temp=35 1508449967
     printQuery(connection, query, "write")
     response = HTTP.post("$(connection.addr)/write"; query=query, body=datastr)
     #rawQuery(connection, query, path="write" method=HTTP.post, body=datastr)
@@ -216,10 +231,11 @@ function write(connection::InfluxConnection, measurement::AbstractString, values
     valuestring = join(["$key=$val" for (key, val) in values], ",")
 
     # Finally, convert timestamp to seconds
-    timestring = "$(round(Int64,timestamp))"
+    @show timestring = "$(round(Int64,timestamp))"
 
     # Put them all together to get a data string
     datastr = "$(measurement)$(tagstring) $(valuestring) $(timestring)"
+    #println(datastr)
 
     printQuery(connection, query, "write")
     response = HTTP.post("$(connection.addr)/write"; query=query, body=datastr)
