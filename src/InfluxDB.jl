@@ -141,8 +141,7 @@ function queryAsTimeArray(connection::InfluxConnection,
     for (i, row) in enumerate(series_dict["values"])
         # TODO: support millisecond precision eg. "2017-10-07T22:08:27.097028615Z"
         dates[i] = parse(DateTime, row[1],  @dateformat_str "yyyy-mm-dd\\THH:MM:SSZ")
-        #@show row
-        values[i,:] = Vector{Float64}(row[2:end])
+        values[i,:] = Vector{Float64}([x==nothing?NaN:x for x in row[2:end]])
     end
     TimeArray(dates, values, Vector{String}(series_dict["columns"][2:end]))
 end
