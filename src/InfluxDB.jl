@@ -121,7 +121,7 @@ function queryAsTimeArray(connection::InfluxConnection,
     end
     whereClause = ""
     if length(whereClauseItems) > 0
-        @show whereClauseItems
+        #@show whereClauseItems
         whereClause = """WHERE $(join(whereClauseItems," AND "))"""
     end
     query["q"] = "SELECT * FROM \"$measurement\" $whereClause"
@@ -231,7 +231,7 @@ function write(connection::InfluxConnection, measurement::AbstractString, values
     valuestring = join(["$key=$val" for (key, val) in values], ",")
 
     # Finally, convert timestamp to seconds
-    @show timestring = "$(round(Int64,timestamp))"
+    timestring = "$(round(Int64,timestamp))"
 
     # Put them all together to get a data string
     datastr = "$(measurement)$(tagstring) $(valuestring) $(timestring)"
