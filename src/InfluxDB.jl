@@ -269,7 +269,7 @@ function rawQuery(connection::InfluxConnection, query::Dict, method::String="GET
     #, verbose=2
     ,status_exception = true)
     checkResponse(response)
-    @show body=String(response.body)
+    body=String(response.body)
     JSON.parse(body)
 end
 
