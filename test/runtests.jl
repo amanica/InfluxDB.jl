@@ -7,10 +7,13 @@ using TimeSeries
 measurement="cpu"
 field="temp"
 
+TEST_INFLUX_URL="http://localhost:8086"
+TEST_INFLUX_DB="julia-test"
+
 function testHidePassword()
     io=IOBuffer()
-    connection = InfluxDB.InfluxConnection("http://localhost:8086",
-        "julia-test",
+    connection = InfluxDB.InfluxConnection(TEST_INFLUX_URL,
+        TEST_INFLUX_DB,
         printQueries=true, username="someusername", password="topsecret")
     query = InfluxDB.buildQuery(connection)
     query["q"] = "SHOW measurements"
@@ -89,12 +92,19 @@ function testWriteTimeArray(connection::InfluxDB.InfluxConnection)
     true
 end
 
+function testSmartUrl()
+    connection = InfluxDB.InfluxConnection("localhost:0", TEST_INFLUX_DB,
+        printQueries=true)
+    InfluxDB.create_db(connection)
+    true
+end
 
 @testset "Influxdb tests" begin
-    connection = InfluxDB.InfluxConnection("http://localhost:8086", "julia-test",
+    connection = InfluxDB.InfluxConnection(TEST_INFLUX_URL, TEST_INFLUX_DB,
         printQueries=true)
     InfluxDB.create_db(connection)
 
+    @test testSmartUrl()
     @test testHidePassword()
     @test testWrite(connection)
     @test testReadTimeSeries(connection)

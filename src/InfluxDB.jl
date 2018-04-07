@@ -36,10 +36,11 @@ type InfluxConnection
         end
 
         # If we didn't get an explicit port, default to 8086
-        if HTTP.port(uri) == 0
-            uri =  HTTP.URI(HTTP.scheme(uri), HTTP.host(uri), 8086, HTTP.path(uri))
+        @show uri.port
+        if uri.port == "0"
+            uri = HTTP.URI(; scheme=uri.scheme, host=uri.host, port="8086", path=uri.path)
         end
-
+        @show uri
         return new(uri, dbName, username, password, printQueries)
     end
 end
@@ -48,7 +49,7 @@ end
 function showMeasurements(connection::InfluxConnection)
     query = buildQuery(connection)
     query["q"] = "SHOW measurements"
-    results = rawQuery(connection, query, HTTP.post)["results"][1]
+    results = rawQuery(connection, query)["results"][1] #FIXME: must be "POST" in newer influx
     if isempty(results)
         return []
     end
@@ -61,7 +62,7 @@ function dropMeasurement(connection::InfluxConnection,
         measurement::AbstractString)
     query = buildQuery(connection)
     query["q"] = "DROP MEASUREMENT \"$measurement\""
-    rawQuery(connection, query, HTTP.post)
+    rawQuery(connection, query) #FIXME: must be "POST" in newer influx
 end
 
 
@@ -167,7 +168,7 @@ function create_db(connection::InfluxConnection)
     #maybe need to unset the db..
     query["q"] = "CREATE DATABASE \"$(connection.dbName)\""
     delete!(query,"db")
-    rawQuery(connection, query, HTTP.post)
+    rawQuery(connection, query) #FIXME: must be "POST" in newer influx
 end
 
 function write(connection::InfluxConnection,  measurement::AbstractString,
@@ -207,7 +208,7 @@ function write(connection::InfluxConnection,  measurement::AbstractString,
     #"cpu" "a.a"=0.5194279418894208,"b.b"=3.907715037511672 1483228800
     #cpu temp=35 1508449967
     printQuery(connection, query, "write")
-    response = HTTP.post("$(connection.addr)/write"; query=query, body=datastr)
+    response = HTTP.request("POST", "$(connection.addr)/write"; query=query, body=datastr)
     #rawQuery(connection, query, path="write" method=HTTP.post, body=datastr)
     checkResponse(response, 204)
 end
@@ -237,7 +238,8 @@ function write(connection::InfluxConnection, measurement::AbstractString, values
     #println(datastr)
 
     printQuery(connection, query, "write")
-    response = HTTP.post("$(connection.addr)/write"; query=query, body=datastr)
+    response = HTTP.request("POST",
+        "$(connection.addr)/write"; query=query, body=datastr)
     #rawQuery(connection, query, path="write" method=HTTP.post, body=datastr)
     checkResponse(response, 204)
 end
@@ -254,18 +256,21 @@ function buildQuery(connection::InfluxConnection)
 end
 
 function checkResponse(response::HTTP.Response, expectedStatus=200)
-    code = HTTP.status(response)
+    code = response.status
     if code != expectedStatus
         #@show response
         error("$(HTTP.statustext(response)):\n$response")
     end
 end
 
-function rawQuery(connection::InfluxConnection, query::Dict, method::Function=HTTP.get)
+function rawQuery(connection::InfluxConnection, query::Dict, method::String="GET")
     printQuery(connection, query, "query")
-    response = method("$(connection.addr)/query"; query=query)
+    response = HTTP.request(method, "$(connection.addr)/query"; query=query
+    #, verbose=2
+    ,status_exception = true)
     checkResponse(response)
-    JSON.parse(HTTP.body(response))
+    @show body=String(response.body)
+    JSON.parse(body)
 end
 
 function rawPrintQuery(connection::InfluxConnection, query::Dict,
